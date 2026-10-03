@@ -35,7 +35,7 @@ jobs:
               Write-Host "`r🚀 Đang khởi tạo hệ thống... $($frames[$i % 8])" -NoNewline -ForegroundColor Blue
               Start-Sleep -Milliseconds 100
           }
-          Write-Host "`r✅ Hệ thống đã sẵn sàng!                    " -ForegroundColor Green
+          Write-Host "`r✅ Hệ thống đã sẵn sàng!!                   " -ForegroundColor Green
 
       # CẤU HÌNH NÂNG CAO
       - name: 🔧 CẤU HÌNH HỆ THỐNG
