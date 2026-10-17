@@ -3,12 +3,12 @@ name: Build Unsigned iOS IPA
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch: # Cho phép build thủ công
+  workflow_dispatch:
 
 jobs:
   build-ios:
     name: Build iOS IPA (Unsigned)
-    runs-on: macos-14 # Sử dụng runner macOS 14 của GitHub
+    runs-on: macos-14
 
     steps:
       - name: Checkout repository
@@ -19,32 +19,68 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
+      - name: Create Capacitor wrapper project
+        working-directory: ${{ runner.temp }}
         run: |
-          npm ci || npm install --legacy-peer-deps
+          mkdir -p cap-app
+          cd cap-app
 
-      - name: Build web assets
-        run: npm run build # Lệnh này tạo ra thư mục dist/ hoặc build/
+          npm init -y
+          npm install @capacitor/core @capacitor/ios @capacitor/cli
 
-      - name: Sync Capacitor iOS project
-        run: npx cap sync ios
+          # Copy toàn bộ file trong repo vào www (bỏ .git và .github)
+          mkdir -p www
+          shopt -s dotglob nullglob
+          for f in ${{ github.workspace }}/*; do
+            base=$(basename "$f")
+            if [ "$base" != ".git" ] && [ "$base" != ".github" ] && [ "$base" != "node_modules" ]; then
+              cp -R "$f" www/
+            fi
+          done
+          shopt -u dotglob nullglob
+
+          # Xử lý trường hợp file chính tên là App.html
+          if [ ! -f www/index.html ]; then
+            if [ -f www/App.html ]; then
+              echo "→ Phát hiện App.html, tạo bản sao index.html"
+              cp www/App.html www/index.html
+            else
+              echo "❌ Không tìm thấy cả index.html và App.html"
+              ls -la www/
+              exit 1
+            fi
+          fi
+
+          echo "=== Nội dung thư mục www ==="
+          ls -la www/
+
+          # Tạo cấu hình Capacitor
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.example.myapp",
+            "appName": "MyApp",
+            "webDir": "www"
+          }
+          EOF
+
+          npx cap add ios
+          npx cap sync ios
 
       - name: Install CocoaPods dependencies
-        run: |
-          cd ios/App
-          pod install --repo-update
+        working-directory: ${{ runner.temp }}/cap-app/ios/App
+        run: pod install --repo-update
 
-      - name: Disable code signing in Xcode project
+      - name: Disable code signing
+        working-directory: ${{ runner.temp }}/cap-app/ios/App
         run: |
-          # Sửa trực tiếp file project.pbxproj để tắt code signing
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' ios/App/App.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' ios/App/App.xcodeproj/project.pbxproj
-          sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' ios/App/App.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' App.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' App.xcodeproj/project.pbxproj
+          sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' App.xcodeproj/project.pbxproj
 
       - name: Archive iOS app without signing
         run: |
           xcodebuild archive \
-            -workspace ios/App/App.xcworkspace \
+            -workspace ${{ runner.temp }}/cap-app/ios/App/App.xcworkspace \
             -scheme App \
             -configuration Release \
             -archivePath ${{ runner.temp }}/unsigned.xcarchive \
@@ -56,13 +92,11 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          # Tạo cấu trúc thư mục Payload chuẩn của IPA
           mkdir -p ${{ runner.temp }}/Payload
-          # Sao chép file .app từ archive vào Payload
           cp -R ${{ runner.temp }}/unsigned.xcarchive/Products/Applications/App.app ${{ runner.temp }}/Payload/
-          # Nén thành file .ipa
           cd ${{ runner.temp }}
           zip -r -q App-unsigned.ipa Payload/
+          ls -lh App-unsigned.ipa
 
       - name: Upload unsigned IPA as artifact
         uses: actions/upload-artifact@v4
