@@ -26,9 +26,9 @@ jobs:
           cd cap-app
 
           npm init -y
-          npm install @capacitor/core @capacitor/ios @capacitor/cli
+          # Pin Capacitor 6 (dùng CocoaPods, ổn định)
+          npm install @capacitor/core@^6 @capacitor/ios@^6 @capacitor/cli@^6
 
-          # Copy toàn bộ file trong repo vào www (bỏ .git và .github)
           mkdir -p www
           shopt -s dotglob nullglob
           for f in ${{ github.workspace }}/*; do
@@ -39,22 +39,17 @@ jobs:
           done
           shopt -u dotglob nullglob
 
-          # Xử lý trường hợp file chính tên là App.html
           if [ ! -f www/index.html ]; then
             if [ -f www/App.html ]; then
-              echo "→ Phát hiện App.html, tạo bản sao index.html"
+              echo "→ Tạo index.html từ App.html"
               cp www/App.html www/index.html
             else
-              echo "❌ Không tìm thấy cả index.html và App.html"
+              echo "❌ Không tìm thấy index.html hoặc App.html"
               ls -la www/
               exit 1
             fi
           fi
 
-          echo "=== Nội dung thư mục www ==="
-          ls -la www/
-
-          # Tạo cấu hình Capacitor
           cat > capacitor.config.json <<'EOF'
           {
             "appId": "com.example.myapp",
@@ -63,24 +58,57 @@ jobs:
           }
           EOF
 
+          echo "=== Running: npx cap add ios ==="
           npx cap add ios
+
+          echo "=== Running: npx cap sync ios ==="
           npx cap sync ios
+
+          echo "=== DEBUG: ios/ structure ==="
+          ls -la ios/ || true
+          echo "--- ios/App/ ---"
+          ls -la ios/App/ || true
+          echo "--- Podfile check ---"
+          if [ -f "ios/App/Podfile" ]; then
+            echo "✅ Podfile tồn tại"
+          else
+            echo "⚠️ Podfile KHÔNG tồn tại"
+          fi
+          echo "--- SPM check (Package.swift) ---"
+          find ios -name "Package.swift" 2>/dev/null || echo "Không có Package.swift"
 
       - name: Install CocoaPods dependencies
         working-directory: ${{ runner.temp }}/cap-app/ios/App
-        run: pod install --repo-update
+        run: |
+          if [ -f "Podfile" ] && [ ! -d "Pods" ]; then
+            echo "→ Running: pod install"
+            pod install --repo-update
+          else
+            echo "✅ Bỏ qua pod install (không có Podfile hoặc Pods đã cài)"
+          fi
 
       - name: Disable code signing
         working-directory: ${{ runner.temp }}/cap-app/ios/App
         run: |
+          if [ ! -f "App.xcodeproj/project.pbxproj" ]; then
+            echo "❌ Không tìm thấy App.xcodeproj/project.pbxproj"
+            ls -la
+            exit 1
+          fi
           sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' App.xcodeproj/project.pbxproj
           sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' App.xcodeproj/project.pbxproj
           sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' App.xcodeproj/project.pbxproj
 
       - name: Archive iOS app without signing
         run: |
+          WORKSPACE="${{ runner.temp }}/cap-app/ios/App/App.xcworkspace"
+          if [ ! -d "$WORKSPACE" ]; then
+            echo "❌ Không có $WORKSPACE"
+            ls -la ${{ runner.temp }}/cap-app/ios/App/
+            exit 1
+          fi
           xcodebuild archive \
-            -workspace ${{ runner.temp }}/cap-app/ios/App/App.xcworkspace \
+            -workspace "$WORKSPACE" \
             -scheme App \
             -configuration Release \
             -archivePath ${{ runner.temp }}/unsigned.xcarchive \
